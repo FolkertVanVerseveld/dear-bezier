@@ -9,9 +9,62 @@ using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
 
 using static ImGuiNET.ImGuiNative;
+using System.Diagnostics;
 
 namespace ImGuiNET
 {
+	/// <summary>
+	/// Abstract object following a continuous bezier path curve.
+	/// </summary>
+	class BezierObject
+	{
+		BezierPath path;
+
+		bool fractional_moving;
+		float pos = 0, move_speed, radius = 8;
+
+		public BezierObject(BezierPath path, bool fractional_moving, float move_speed)
+		{
+			this.path = path;
+			this.fractional_moving = fractional_moving;
+			this.move_speed = move_speed;
+		}
+		public void tick(float dt)
+		{
+			if (fractional_moving)
+				pos = (pos + dt * move_speed) % 1.0f;
+			else
+				pos = (pos + dt * 80 * move_speed) % path.get_length();
+		}
+
+		public void show()
+		{
+			var gfx = ImGui.GetForegroundDrawList();
+			uint col = ImGui.GetColorU32(new Vector4(0.0f, 0.0f, 1.0f, 1.0f));
+
+			Vector3 ball_pos = Vector3.Zero;
+
+			if (fractional_moving)
+				ball_pos = path.find_point_in_path_frac(pos);
+			else
+				ball_pos = path.find_point_in_path_pos(pos);
+
+			gfx.AddCircleFilled(new Vector2(ball_pos.X, ball_pos.Y), radius, col);
+		}
+
+		public void show_controls()
+		{
+			float path_length = path.get_length();
+			ImGui.Text($"Path length: {path_length}");
+			ImGui.Checkbox("Use fraction [0,1]", ref fractional_moving);
+
+			if (fractional_moving)
+				ImGui.SliderFloat("Ball position", ref pos, 0.0f, 1.0f);
+			else
+				ImGui.SliderFloat("Ball position", ref pos, 0.0f, path_length);
+		}
+	}
+
 	class BezierPath
 	{
 		public List<Vector3> points = new List<Vector3>();
@@ -21,10 +74,18 @@ namespace ImGuiNET
 		int point_index = 0, selected = -1;
 		double detail = 0.1;
 
-		float path_length = 0, pos_frac = 0;
-		bool path_use_frac = true;
+		float path_length;
+
+		// add any objects here
+		public bool auto_move = false, auto_close = false;
+		public BezierObject ball;
 
 		static readonly float pt_radius = 4.0f;
+
+		public BezierPath()
+		{
+			ball = new BezierObject(this, true, 0.1f);
+		}
 
 		/// <summary>
 		/// Bereken tussenpunten voor de gegeven bezierpunten controls met de stapgrootte detail.
@@ -163,7 +224,7 @@ namespace ImGuiNET
 			return -1;
 		}
 
-		Vector3 find_point_in_path_frac(float frac)
+		public Vector3 find_point_in_path_frac(float frac)
 		{
 			if (frac < 0) frac = 0;
 			if (frac > 1) frac = 1;
@@ -186,7 +247,7 @@ namespace ImGuiNET
 			return gfx_points[0];
 		}
 
-		Vector3 find_point_in_path_pos(float pos)
+		public Vector3 find_point_in_path_pos(float pos)
 		{
 			if (pos < 0) pos = 0;
 			if (pos > path_length) pos = path_length;
@@ -209,13 +270,57 @@ namespace ImGuiNET
 			return gfx_points[0];
 		}
 
+		public void clear()
+		{
+			points.Clear();
+			gfx_points.Clear();
+			path_length = 0;
+		}
+
+		private void close_loop()
+		{
+			if (!auto_close || points.Count <= 4)
+				return;
+			
+			points[points.Count - 1] = points[0];
+			points[points.Count - 2] = points[0];
+
+			int i = 1;
+			Vector3 p0 = center(points[i - 1], points[i]), p1 = points[i], p2 = points[i + 1];
+			points[points.Count - 1] = quadBezier(p0, p1, p2, 0);
+		}
+
+		public void tick(double dt)
+		{
+			if (gfx_points.Count < 2)
+				return;
+
+			close_loop();
+
+			if (auto_move)
+				ball.tick((float)dt);
+		}
+
+		public void show_objects()
+		{
+			if (gfx_points.Count < 2)
+				return;
+
+			ImGui.Checkbox("Auto move", ref auto_move);
+
+			// add any new objects here
+			ball.show_controls();
+			ball.show();
+		}
+
 		public void show()
 		{
 			ImGui.Begin("Bezier padvolger dinges");
 			{
-				ImGui.Text($"Aantal punten: {points.Count}");
-
 				bool changed = false;
+
+				ImGui.Text($"Aantal punten: {points.Count}");
+				changed |= ImGui.Checkbox("Gesloten lus", ref auto_close);
 
 				ImGui.InputFloat("X", ref x);
 				ImGui.InputFloat("Y", ref y);
@@ -229,9 +334,7 @@ namespace ImGuiNET
 					detail = 0.5;
 
 				if (ImGui.Button("Weg ermee"))
-				{
-					points.Clear();
-				}
+					clear();
 
 				ImGui.SameLine();
 
@@ -283,32 +386,11 @@ namespace ImGuiNET
 				{
 					gfx_points = continuous_curve(points, detail);
 					path_length = get_length();
+					close_loop();
 				}
 
 				show_path();
-
-				if (gfx_points.Count > 1)
-				{
-					ImGui.Text($"Path length: {path_length}");
-					ImGui.Checkbox("Use fraction [0,1]", ref path_use_frac);
-
-					if (path_use_frac)
-						ImGui.SliderFloat("Ball position", ref pos_frac, 0.0f, 1.0f);
-					else
-						ImGui.SliderFloat("Ball position", ref pos_frac, 0.0f, path_length);
-
-					var gfx = ImGui.GetForegroundDrawList();
-					uint col = ImGui.GetColorU32(new Vector4(0.0f, 0.0f, 1.0f, 1.0f));
-
-					Vector3 ball_pos = Vector3.Zero;
-
-					if (path_use_frac)
-						ball_pos = find_point_in_path_frac(pos_frac);
-					else
-						ball_pos = find_point_in_path_pos(pos_frac);
-
-					gfx.AddCircleFilled(new Vector2(ball_pos.X, ball_pos.Y), 8.0f, col);
-				}
+				show_objects();
 
 			}
 			ImGui.End();
@@ -354,6 +436,9 @@ namespace ImGuiNET
 
 		static void Main(string[] args)
 		{
+			Stopwatch sw = new Stopwatch();
+			sw.Start();
+
 			// Create window, GraphicsDevice, and all resources necessary for the demo.
 			VeldridStartup.CreateWindowAndGraphicsDevice(
 				new WindowCreateInfo(50, 50, 1280, 720, WindowState.Normal, "ImGui.NET Sample Program"),
@@ -378,6 +463,8 @@ namespace ImGuiNET
 				if (!_window.Exists) { break; }
 				_controller.Update(1f / 60f, snapshot); // Feed the input events to our ImGui controller, which passes them through to ImGui.
 
+				tick(sw.ElapsedMilliseconds / 1000.0);
+				sw.Restart();
 				SubmitUI();
 
 				_cl.Begin();
@@ -394,6 +481,11 @@ namespace ImGuiNET
 			_controller.Dispose();
 			_cl.Dispose();
 			_gd.Dispose();
+		}
+
+		static void tick(double dt)
+		{
+			bezier_widget.tick(dt);
 		}
 
 		private static unsafe void SubmitUI()
