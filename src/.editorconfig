@@ -1,0 +1,7 @@
+# https://editorconfig.org/
+# https://stackoverflow.com/questions/5406172/utf-8-without-bom/51716830#51716830
+root=true
+[*.{cs}]
+end_of_line=lf
+indent_style=tab
+charset=utf-8
